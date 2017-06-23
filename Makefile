@@ -119,6 +119,14 @@ $(error Can't build $(TARGET_ARCH) binaries on a $(HOST_ARCH) host)
 	endif
 endif
 
+TARGET_PLATFORM_PKG = $(TARGET_PLATFORM)
+ifeq ($(TARGET_PLATFORM_PKG),darwin)
+TARGET_PLATFORM_PKG = macos
+endif
+ifeq ($(TARGET_PLATFORM_PKG),win32)
+TARGET_PLATFORM_PKG = win
+endif
+
 # ---------------------------------------------------------------------
 # Code signing
 # ---------------------------------------------------------------------
@@ -215,45 +223,43 @@ $(BUILD_OUTPUT_DIRECTORY): | $(BUILD_DIRECTORY)
 # CLI
 # ---------------------------------------------------------------------
 
-$(BUILD_DIRECTORY)/node-$(TARGET_PLATFORM)-$(TARGET_ARCH)-dependencies: package.json npm-shrinkwrap.json \
+$(BUILD_DIRECTORY)/$(APPLICATION_NAME)-cli-$(APPLICATION_VERSION)-$(TARGET_PLATFORM)-$(TARGET_ARCH)-app/node_modules: \
+	package.json npm-shrinkwrap.json \
 	| $(BUILD_DIRECTORY)
-	mkdir $@
+	mkdir -p $@
 	./scripts/build/dependencies-npm.sh -p \
 		-r "$(TARGET_ARCH)" \
 		-v "$(NODE_VERSION)" \
-		-x $@ \
+		-x $(dir $@) \
 		-t node \
 		-s "$(TARGET_PLATFORM)"
-	git apply --directory $@/node_modules/lzma-native patches/cli/lzma-native-index-static-addon-require.patch
+	git apply --directory $@/lzma-native patches/cli/lzma-native-index-static-addon-require.patch
 
 $(BUILD_DIRECTORY)/$(APPLICATION_NAME)-cli-$(APPLICATION_VERSION)-$(TARGET_PLATFORM)-$(TARGET_ARCH)-app: \
-	package.json lib \
-	$(BUILD_DIRECTORY)/node-$(TARGET_PLATFORM)-$(TARGET_ARCH)-dependencies \
+	$(BUILD_DIRECTORY)/$(APPLICATION_NAME)-cli-$(APPLICATION_VERSION)-$(TARGET_PLATFORM)-$(TARGET_ARCH)-app/node_modules \
 	| $(BUILD_DIRECTORY)
-	mkdir $@
-	cp $(word 1,$^) $@
-	$(CPRF) $(word 2,$^) $@
-	$(CPRF) $(word 3,$^)/* $@
-
-$(BUILD_DIRECTORY)/$(APPLICATION_NAME)-cli-$(APPLICATION_VERSION)-$(TARGET_PLATFORM)-$(TARGET_ARCH).js: \
-	$(BUILD_DIRECTORY)/$(APPLICATION_NAME)-cli-$(APPLICATION_VERSION)-$(TARGET_PLATFORM)-$(TARGET_ARCH)-app \
-	| $(BUILD_DIRECTORY)
-	./scripts/build/concatenate-javascript.sh -e lib/cli/etcher.js -b $< -o $@ -m
+	cp -rf lib $@
+	cp -rf package.json $@
 
 $(BUILD_DIRECTORY)/$(APPLICATION_NAME)-cli-$(APPLICATION_VERSION)-$(TARGET_PLATFORM)-$(TARGET_ARCH): \
-	$(BUILD_DIRECTORY)/node-$(TARGET_PLATFORM)-$(TARGET_ARCH)-dependencies \
-	$(BUILD_DIRECTORY)/$(APPLICATION_NAME)-cli-$(APPLICATION_VERSION)-$(TARGET_PLATFORM)-$(TARGET_ARCH).js \
+	$(BUILD_DIRECTORY)/$(APPLICATION_NAME)-cli-$(APPLICATION_VERSION)-$(TARGET_PLATFORM)-$(TARGET_ARCH)-app \
 	| $(BUILD_DIRECTORY) $(BUILD_TEMPORARY_DIRECTORY)
 	mkdir $@
-	./scripts/build/node-package-cli.sh -o $@ -l $</node_modules \
-		-n $(APPLICATION_NAME) \
-		-e $(word 2,$^) \
-		-r $(TARGET_ARCH) \
-		-s $(TARGET_PLATFORM)
-
+	$(NPX) pkg --output $@/$(APPLICATION_NAME_LOWERCASE) -t node6-$(TARGET_PLATFORM_PKG)-$(TARGET_ARCH) $</lib/cli/etcher.js
+	./scripts/build/dependencies-npm-extract-addons.sh \
+		-d $</node_modules \
+		-o $@/node_modules
+# pkg currently has a bug where darwin executables
+# can't be code-signed
+# See https://github.com/zeit/pkg/issues/128
+# ifeq ($(TARGET_PLATFORM),darwin)
+# ifdef CSC_NAME
+#		./scripts/build/electron-sign-file-darwin.sh -f $@/$(APPLICATION_NAME_LOWERCASE) -i "$(CSC_NAME)"
+# endif
+# endif
 ifeq ($(TARGET_PLATFORM),win32)
 	./scripts/build/electron-brand-exe.sh \
-		-f $@/etcher.exe \
+		-f $@/$(APPLICATION_NAME_LOWERCASE).exe \
 		-n $(APPLICATION_NAME) \
 		-d "$(APPLICATION_DESCRIPTION)" \
 		-v "$(APPLICATION_VERSION)" \
@@ -263,16 +269,10 @@ ifeq ($(TARGET_PLATFORM),win32)
 		-w $(BUILD_TEMPORARY_DIRECTORY)
 endif
 
-ifeq ($(TARGET_PLATFORM),darwin)
-ifdef CSC_NAME
-	./scripts/build/electron-sign-file-darwin.sh -f $@/etcher -i "$(CSC_NAME)"
-endif
-endif
-
 ifeq ($(TARGET_PLATFORM),win32)
 ifdef CSC_LINK
 ifdef CSC_KEY_PASSWORD
-	./scripts/build/electron-sign-exe-win32.sh -f $@/etcher.exe \
+	./scripts/build/electron-sign-exe-win32.sh -f $@/$(APPLICATION_NAME_LOWERCASE).exe \
 		-d "$(APPLICATION_NAME) - $(APPLICATION_VERSION)" \
 		-c $(CSC_LINK) \
 		-p $(CSC_KEY_PASSWORD)
